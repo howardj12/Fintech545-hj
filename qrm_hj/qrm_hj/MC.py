@@ -11,16 +11,15 @@ def expo_weighted_cov(ret_data,w_lambda):
     expo_w_cov = ret_means.T.values @ np.diag(weight) @ ret_means.values
     return expo_w_cov
 
-# Pearson corr mtx + EW var vec
-def PS_corr_mtx_EW_var_vec(ret_data, w_lambda=0.97):
+
+def pearson_corr_with_ew_variance(ret_data, w_lambda=0.97):
     ew_cov_mtx = expo_weighted_cov(ret_data, w_lambda)
     #np.diag(np.reciprocal(np.sqrt(np.diag(ew_cov_mtx)))) 
     std_dev = np.sqrt(np.diag(ew_cov_mtx))
     corr = np.corrcoef(ret_data.T)
     return np.diag(std_dev) @ corr @ np.diag(std_dev).T
 
-#EW corr mtx + PS var vec
-def EW_corr_mtx_PS_var_vec(ret_data, w_lambda=0.97):
+def ew_corr_with_pearson_variance(ret_data, w_lambda=0.97):
     ew_cov_mtx = expo_weighted_cov(ret_data, w_lambda)
 
     invSD = np.diag(np.reciprocal(np.sqrt(np.diag(ew_cov_mtx))))
@@ -29,35 +28,28 @@ def EW_corr_mtx_PS_var_vec(ret_data, w_lambda=0.97):
     var = np.var(ret_data)
     std_dev = np.sqrt(var)
     return np.diag(std_dev) @ corr @ np.diag(std_dev).T
-####################################################################
 
-# Rebonato and Jackel deal with non-PSD matrix for correlation mtx
-def near_psd(mtx, epsilon=0.0):
-    n = mtx.shape[0]
+def near_psd(mat, epsilon=0.0):
+    n = mat.shape[0]
+    result = mat.copy()
 
-    invSD = None
-    out = mtx.copy()
+    # Check if the input is a covariance matrix, and if so, convert to a correlation matrix
+    if not np.allclose(np.diag(result), 1.0):
+        scale = np.diag(1.0 / np.sqrt(np.diag(result)))
+        result = scale @ result @ scale
 
-    # # calculate the correlation matrix if we got a covariance
-    # if (np.diag(out) == 1.0).sum() != n:
-    #     invSD = np.diag(1 / np.sqrt(np.diag(out)))
-    #     out = invSD.dot(out).dot(invSD)
+    # Perform eigenvalue decomposition and adjust the eigenvalues
+    eigenvalues, eigenvectors = np.linalg.eigh(result)
+    adjusted_eigenvalues = np.maximum(eigenvalues, epsilon)
 
-    # SVD, update the eigen value and scale
-    vals, vecs = np.linalg.eigh(out)
-    vals = np.maximum(vals, epsilon)
-    T = np.reciprocal(np.square(vecs).dot(vals))
-    T = np.diag(np.sqrt(T))
-    l = np.diag(np.sqrt(vals))
-    B = T.dot(vecs).dot(l)
-    out = np.matmul(B, np.transpose(B))
+    # Reconstruct the positive semi-definite matrix
+    result = eigenvectors @ np.diag(np.sqrt(adjusted_eigenvalues)) @ eigenvectors.T
 
-    # # Add back the variance
-    # if invSD is not None:
-    #     invSD = np.diag(1 / np.diag(invSD))
-    #     out = invSD.dot(out).dot(invSD)
-
-    return out
+    # If the input was a covariance matrix, scale back to the original scale
+    if 'scale' in locals():
+        result = np.linalg.inv(scale) @ result @ np.linalg.inv(scale)
+    
+    return result
 
 #Higham deal with non-PSD matrix for correlation mtx
 #First projection
@@ -86,39 +78,40 @@ def fnorm(mtxa, mtxb):
     return norm
 
 
-def higham_psd(mtx, w, max_iteration = 1000, tol = 1e-8):
-    r0 = np.inf
-    Y = mtx
-    S = np.zeros_like(Y)
- 
-    invSD = None
-    # if np.count_nonzero(np.diag(Y) == 1.0) != mtx.shape[0]:
-    #     invSD = np.diag(1.0 / np.sqrt(np.diag(Y)))
-    #     Y = invSD.dot(Y).dot(invSD)
-    C = Y.copy()
+def higham_psd(mat, max_iterations=1000, tolerance=1e-8):
+    Y = mat.copy()
+    delta_s = np.zeros_like(mat)
+
+    if not np.allclose(np.diag(Y), 1.0):
+        inv_sd = np.diag(1.0 / np.sqrt(np.diag(Y)))
+        Y = inv_sd @ Y @ inv_sd
+
+    Y_prev = Y.copy()
     
-    for i in range(max_iteration):
-        R = Y - S
-        X = Ps(R, w)
-        S = X - R
-        Y = Pu(X)
-        r = fnorm(Y, C)
-        minval = np.linalg.eigvals(Y).min()
-        if abs(r - r0) < tol and minval > -1e-8:
+    for i in range(max_iterations):
+        R = Y - delta_s
+        eigenvalues, eigenvectors = np.linalg.eigh(R)
+        eigenvalues = np.maximum(eigenvalues, 0)
+        X = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
+        delta_s = X - R
+        Y = X.copy()
+        np.fill_diagonal(Y, 1)
+
+        # Check for convergence using the Frobenius norm of the difference between consecutive Y matrices
+        if np.linalg.norm(Y - Y_prev, 'fro') < tolerance:
             break
-        else:
-            r0 = r
-    
-    # if invSD is not None:
-    #     invSD = np.diag(1 / np.diag(invSD))
-    #     Y =invSD.dot(Y).dot(invSD)
+
+        Y_prev = Y.copy()
+
+    if 'inv_sd' in locals():
+        Y = np.linalg.inv(inv_sd) @ Y @ np.linalg.inv(inv_sd)
+
     return Y
 
 #Confirm matrix is PSD or not
 def psd(mtx):
     eigenvalues = np.linalg.eigh(mtx)[0]
     return np.all(eigenvalues >= -1e-8)
-###################################################################
 
 #Multivariate normal distribution
 #Cholesky Factorization for PSD matrix
@@ -160,7 +153,7 @@ def pca_sim(cov_mtx, n_draws, percent_explain):
     p_idx = eigenvalues > 1e-8
     eigenvalues = eigenvalues[p_idx]
     eigenvectors = eigenvectors[:, p_idx]
-    #Sort
+
     s_idx = np.argsort(eigenvalues)[::-1]
     eigenvalues = eigenvalues[s_idx]
     eigenvectors = eigenvectors[:, s_idx]
