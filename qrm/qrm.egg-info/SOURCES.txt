@@ -1,4 +1,7 @@
 setup.py
+qrm/MC.py
+qrm/VaR.py
+qrm/__init__.py
 qrm.egg-info/PKG-INFO
 qrm.egg-info/SOURCES.txt
 qrm.egg-info/dependency_links.txt
