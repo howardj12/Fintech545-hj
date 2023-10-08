@@ -1,0 +1,8 @@
+setup.py
+qrm_hj/MC.py
+qrm_hj/VaR.py
+qrm_hj/__init__.py
+qrm_hj.egg-info/PKG-INFO
+qrm_hj.egg-info/SOURCES.txt
+qrm_hj.egg-info/dependency_links.txt
+qrm_hj.egg-info/top_level.txt
