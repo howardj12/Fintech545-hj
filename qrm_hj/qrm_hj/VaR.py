@@ -633,3 +633,273 @@ def Gaussian_Copula_diff(data,N=500):
     # convert U_sim to sim values for each portfolio
     data_simout = convert_sim_values(data_fit, data_sim_U)
     return data_simout
+
+##############################
+
+## Risk & Return Attribution
+
+def rr_attribute(data,w):
+    len_data = len(data)
+    
+    pReturn = np.empty(len_data)
+    weights = np.empty((len_data, len(w)))
+    lastw = w
+    
+    ### start return attribution process
+    for i in range(len_data):
+        # Save Current Weights in Matrix
+        weights[i,:] = lastw
+        # Update Weights by return
+        lastw = lastw * (1 + data.iloc[i,:])
+        # Portfolio return is the sum of the updated weights
+        pR = np.sum(lastw)
+        # Normalize the wieghts back so sum = 1
+        lastw = lastw / pR
+        # Store the return
+        pReturn[i] = pR - 1
+    
+    # Set the portfolio return in the Update Return DataFrame
+    data["Portfolio"] = pReturn
+    
+    # Calculate the total return
+    totalRet = np.exp(np.sum(np.log(pReturn + 1)))-1
+    # Calculate the Carino K
+    k = np.log(totalRet + 1 ) / totalRet
+    
+    # Carino k_t is the ratio scaled by 1/K 
+    carinoK = np.log(1.0 + pReturn) / pReturn / k
+    # Calculate the return attribution
+    attrib = pd.DataFrame(data=data * weights * carinoK.reshape(-1, 1), columns=data.columns+["Portfolio"])
+    
+    Attribution_return = pd.DataFrame({"Stock": ["TotalReturn", "Return Attribution"]})
+    for s in data.columns:
+        # Total Stock return over the period
+        tr = np.exp(np.sum(np.log(data[s] + 1))) - 1
+        # Attribution Return (total portfolio return if we are updating the portfolio column)
+        if s == 'Portfolio':
+            atr = tr
+        else:
+            atr = attrib[s].sum()
+        # Set the values
+        Attribution_return[s] = [tr, atr]
+    
+    
+    ### start risk attribution process
+    Y = data * weights
+    X = np.hstack((np.ones((len(pReturn,1)), pReturn.reshape(-1,1))))
+    # Calculate the Beta and discard the intercept
+    B = np.linalg.inv(X.T @ X) @ X.T @ Y
+    B = B[1:]
+
+    # Component SD is Beta times the standard Deviation of the portfolio
+    cSD = B * np.std(pReturn)
+    Attribution_risk = pd.DataFrame({"Stock": ["Vol Attribution"]})
+    for s in data.columns:
+        # Attribution Risk (total portfolio return if we are updating the portfolio column)
+        if s == 'Portfolio':
+            vol = np.std(pReturn)
+        else:
+            vol = cSD[data.columns.to_list().index(s)]
+        # Set the values
+        Attribution_risk[s] = [vol]
+    
+    # combine both Attribution dataframes
+    Attribution = pd.concat([Attribution_return,Attribution_risk], ignore_index=True)
+    return Attribution
+
+# Betas:
+# stocks = [:AAPL, :MSFT, Symbol("BRK-B"), :CSCO, :JNJ]
+# to_reg = innerjoin(returns[!,vcat(:Date, :SPY, stocks)], ffData, on=:Date)
+# xnames = [:Mkt_RF, :SMB, :HML, :Mom]
+# #OLS Regression for all Stocks
+# X = hcat(fill(1.0,size(to_reg,1)),Matrix(to_reg[!,xnames]))
+# Y = Matrix(to_reg[!,stocks])
+# Betas = (inv(X'*X)*X'*Y)'[:,2:size(xnames,1)+1]
+def expost_factor(w, upReturns, upFfData, Betas):
+    stocks = upReturns.columns
+    factors = upFfData.columns
+
+    n = len(upReturns)
+    m = len(stocks)
+
+    pReturn = np.empty(n)
+    residReturn = np.empty(n)
+    weights = np.empty((n, len(w)))
+    factorWeights = np.empty((n, len(factors)))
+    lastW = w
+    matReturns = upReturns[stocks].to_numpy()
+    ffReturns = upFfData[factors].to_numpy()
+
+    for i in range(n):
+        # Save Current Weights in Matrix
+        weights[i, :] = lastW
+
+        # Factor Weight
+        factorWeights[i, :] = np.sum(Betas * lastW, axis=0)
+
+        # Update Weights by return
+        lastW = lastW * (1.0 + matReturns[i, :])
+
+        # Portfolio return is the sum of the updated weights
+        pR = np.sum(lastW)
+        # Normalize the weights back so sum = 1
+        lastW = lastW / pR
+        # Store the return
+        pReturn[i] = pR - 1
+
+        # Residual
+        residReturn[i] = (pR - 1) - factorWeights[i, :].dot(ffReturns[i, :])
+
+    # Set the portfolio return in the Update Return DataFrame
+    upFfData['Alpha'] = residReturn
+    upFfData['Portfolio'] = pReturn
+
+    # Calculate the total return
+    totalRet = np.exp(np.sum(np.log(pReturn + 1))) - 1
+    # Calculate the Carino K
+    k = np.log(totalRet + 1) / totalRet
+
+    # Carino k_t is the ratio scaled by 1/K
+    carinoK = np.log(1.0 + pReturn) / pReturn / k
+    # Calculate the return attribution
+    attrib = pd.DataFrame(ffReturns * factorWeights * carinoK.reshape(-1, 1), columns=factors)
+    attrib['Alpha'] = residReturn * carinoK
+
+    # Set up a DataFrame for output
+    Attribution = pd.DataFrame({"Stock": ["TotalReturn", "Return Attribution"]})
+
+    newFactors = factors.to_list() + ['Alpha']
+    # Loop over the factors
+    for s in newFactors + ['Portfolio']:
+        # Total Stock return over the period
+        tr = np.exp(np.sum(np.log(upFfData[s] + 1))) - 1
+        # Attribution Return (total portfolio return if we are updating the portfolio column)
+        if s == 'Portfolio':
+            atr = tr 
+        else:
+            atr = attrib[s].sum()
+        # Set the values
+        Attribution[s] = [tr, atr]
+
+    # Realized Volatility Attribution
+    # Y is our stock returns scaled by their weight at each time
+    Y = np.hstack((ffReturns * factorWeights, residReturn.reshape(-1, 1)))
+    # Set up X with the Portfolio Return
+    X = np.column_stack((np.ones_like(pReturn), pReturn))
+    # Calculate the Beta and discard the intercept
+    B = np.linalg.inv(X.T @ X) @ X.T @ Y
+    B = B[1, :]
+    # Component SD is Beta times the standard deviation of the portfolio
+    cSD = B * np.std(pReturn)
+
+    # Check that the sum of component SD is equal to the portfolio SD
+    assert np.isclose(np.sum(cSD), np.std(pReturn), rtol=1e-05, atol=1e-08)
+
+    # Add the Vol attribution to the output
+    vol_attrib = pd.DataFrame({"Stock": "Vol Attribution"})
+    for i, factor in enumerate(newFactors):
+        vol_attrib[factor] = [cSD[i]]
+    vol_attrib['Portfolio'] = [np.std(pReturn)]
+    Attribution = pd.concat([Attribution, vol_attrib], ignore_index=True)
+
+    return Attribution
+
+# Risk Budgeting
+def risk_budget(w,covar):
+    pSig = np.sqrt(w.T @ covar @ w)
+    CSD = (w * (covar @ w)) / pSig
+    return pd.DataFrame((CSD).T)
+
+# Risk Budgeting with Risk Parity
+def risk_budget_parity(covar,B=None):
+    # Function for Portfolio Volatility
+    def pvol(w, covar):
+        return np.sqrt(np.dot(w.T, np.dot(covar, w)))
+
+    # Function for Component Standard Deviation
+    def pCSD(w, covar):
+        pVol = pvol(w, covar)
+        csd = w * (covar @ w) / pVol
+        return csd
+
+    # Sum Square Error of cSD
+    def sseCSD(w, covar,B=None):
+        if B == None:
+            csd = pCSD(w, covar)
+        else:
+            csd = pCSD(w, covar) / B
+        mCSD = sum(csd) / n
+        dCsd = csd - mCSD
+        se = dCsd ** 2
+        return 1.0e5 * sum(se)  # Add a large multiplier for better convergence
+
+    n = len(covar.columns)
+
+    # Weights with boundary at 0
+    w0 = np.ones(n) / n
+    bounds = [(0, None)] * n
+
+    res = minimize(sseCSD, w0, args=covar, method='SLSQP', bounds=bounds, constraints={'type': 'eq', 'fun': lambda w: sum(w) - 1.0})
+    riskBudget = pd.DataFrame({'Stock': covar.columns, 'w': res.x,'RiskBudget': [risk_budget(res.x,covar)[0][i] for i in range(len(covar.columns))],'σ': np.sqrt(np.diag(covar))})
+    return riskBudget
+
+# Nonnormal Risk Parity (for returns that are not normally distributed)
+def nonnormal_risk_parity(simReturn):
+    def _ES(w, simReturn):
+        r = simReturn @ w
+        VaR, ES = cal_ES(r,alpha=0.05)
+        return ES
+
+    # Function for the component ES
+    def CES(w, simReturn):
+        n = len(w)
+        ces = np.zeros(n)
+        es = _ES(w, simReturn)
+        e = 1e-6
+        for i in range(n):
+            old = w[i]
+            w[i] = w[i]+e
+            ces[i] = old*(_ES(w, simReturn) - es)/e
+            w[i] = old
+        return ces
+
+    # SSE of the Component ES
+    def SSE_CES(w, simReturn):
+        ces = CES(w, simReturn)
+        ces = ces - np.mean(ces)
+        return 1e3 * (np.transpose(ces) @ ces)
+    
+    n = len(simReturn[0])
+    w0 = np.ones(n) / n
+    bnds = [(0, None)] * n
+    cons = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1}]
+    res = minimize(SSE_CES, w0, args=simReturn, method='SLSQP', bounds=bnds, constraints=cons)
+    w = res.x
+    ES_RPWeights = pd.DataFrame({'Stock': simReturn.columns, 'Weight': w, 'CES': CES(w,simReturn)})
+    return w
+
+##############################
+
+## Graphing
+###before using these functions, remember to first "plt.figure()" and eventually "plt.show()"
+# define a function to graph ACF
+def acf(data):
+    stmplot.plot_acf(data)
+
+# define a function to graph PACF
+def acf(data):
+    stmplot.plot_pacf(data)
+
+# define a function to plot given data's distribution in the form of curve
+def plot_dist_curve(data):
+    sns.kdeplot(data, color="b", label=None)
+
+# define a function to plot given data's distribution in the form of histgram
+def plot_dist_hist(data):
+    # plot original data
+    sns.displot(data, stat='density', palette=('Greys'), label=None)
+    
+# define a function to plot a vertical line intersecting with x axis
+def add_vertical_line(value):
+    plt.axvline(x=value, color='b', label=None)
+
