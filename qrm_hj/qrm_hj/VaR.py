@@ -182,6 +182,8 @@ def cal_his_var(portfolio, prices, p_type, alpha=0.05, N = 10000):
     var = np.percentile(sim_change, alpha*100) * (-1)
     return var, sim_change
 
+##############################
+
 # ES calculation of individual data
 def cal_ES(x,alpha=0.05):
     xs = np.sort(x)
@@ -191,6 +193,101 @@ def cal_ES(x,alpha=0.05):
     VaR = (xs[iup] + xs[idn]) / 2
     ES = xs[0:idn].mean()
     return -VaR,-ES
+
+## VaR calculation
+# assume no distribution
+def cal_VaR(x,alpha=0.05):
+    xs = np.sort(x)
+    n = alpha * len(xs)
+    iup = math.ceil(n)
+    idn = math.floor(n)
+    VaR = (xs[iup] + xs[idn]) / 2
+    return -VaR
+
+# another way without assuming any distribution
+def comp_VaR(data, mean=0, alpha=0.05):
+    return mean - np.quantile(data, alpha)
+
+# assume basic distributions (only normal, t, and AR(1) are available in this function)
+def VaR_bas_dist(data, alpha=0.05, dist="normal", n=10000):
+    # demean data
+    data = data - data.mean()
+    if dist=="normal":
+        fit_result = norm.fit(data)
+        return -norm.ppf(alpha, loc=fit_result[0], scale=fit_result[1])
+    elif dist=="t":
+        fit_result = t.fit(data)
+        return -t.ppf(alpha, df=fit_result[0], loc=fit_result[1], scale=fit_result[2])
+    elif dist=="ar1":
+        mod = sm.tsa.ARIMA(data, order=(1, 0, 0))
+        fit_result = mod.fit()
+        summary = fit_result.summary()
+        m = float(summary.tables[1].data[1][1])
+        a1 = float(summary.tables[1].data[2][1])
+        s = np.sqrt(float(summary.tables[1].data[3][1]))
+        out = np.zeros(n)
+        sim = np.random.normal(size=n)
+        data_last = data.iloc[-1] - m
+        for i in range(n):
+            out[i] = a1 * data_last + sim[i] * s + m
+        return comp_VaR(out, mean=out.mean())
+    else:
+        return "Invalid distribution in this method."
+
+# delta normal VaR for portfolios (check the order of data, if it is from farthest to nearest, this is correct; if not, plz modify the code or reverse the order to "farthest and nearest"; make sure that there should not be a date column in returns)
+def del_norm_VaR(current_prices, holdings, returns, lamda=0.94, alpha=0.05):
+    # demean returns
+    returns -= returns.mean()
+    w = []
+    cw = []
+    PV = 0
+    delta = np.zeros(len(holdings))
+    populateWeights(returns, w, cw, lamda)
+    w = w[::-1]
+    cov = exwCovMat(returns, w)
+    for i in range(len(holdings)):
+        temp_holding = holdings.iloc[i,-1] 
+        value = temp_holding * current_prices[i]
+        PV += value
+        delta[i] = value
+    delta = delta / PV
+    fac = np.sqrt(np.transpose(delta) @ cov @ delta)
+    VaR = -PV * norm.ppf(alpha, loc=0, scale=1) * fac
+    return VaR
+
+# historic VaR (note that when used, check how returns are derived; if they are log returns, you are fine; if they are arithmetic returns, change the way you calculate simulated prices; also, there should not be a date column in returns)
+def hist_VaR(current_prices, holdings, returns, alpha=0.05):
+    # demean returns
+    returns -= returns.mean()
+    PV = 0
+    for i in range(len(holdings)):
+        value = holdings.iloc[i,-1] * current_prices[i]
+        PV += value
+    sim_prices = (np.exp(returns)) * np.transpose(current_prices)
+    port_values = np.dot(sim_prices, holdings.iloc[:,-1])
+    port_values_sorted = np.sort(port_values)
+    index = np.floor(alpha*len(returns))
+    VaR = PV - port_values_sorted[int(index-1)]
+    return VaR
+
+# Monte Carlo normal VaR (note that when used, check how returns are derived; if they are log returns, you are fine; if they are arithmetic returns, change the way you calculate simulated prices)
+def MC_VaR(current_prices, holdings, returns, n=10000, alpha=0.05):
+    # demean returns
+    returns -= returns.mean()
+    PV = 0
+    for i in range(len(holdings)):
+        value = holdings.iloc[i,-1] * current_prices[i]
+        PV += value
+    sim_returns = np.random.multivariate_normal(returns.mean(), returns.cov(), (1,len(holdings),n))
+    sim_returns = np.transpose(sim_returns)
+    sim_prices = (np.exp(returns)) * np.transpose(current_prices)
+    port_values = np.dot(sim_prices, holdings.iloc[:,-1])
+    port_values_sorted = np.sort(port_values)
+    index = np.floor(alpha*n)
+    VaR = PV - port_values_sorted[int(index-1)]
+    return VaR
+
+##############################
 
 ## Option Pricing
 # calculate implied volatility for GBSM
@@ -355,3 +452,80 @@ def crho_gbsm(underlying, strike, ttm, rf, b, ivol, type="call"):
     else:
         print("Invalid type of option")
 
+##############################
+        
+## Portfolio Optimization
+# calculate minimal risk with target return
+def optimize_risk(covar, expected_r, R):
+    # Define objective function
+    def objective(w):
+        return w @ covar @ w.T
+
+    # Define constraints
+    constraints = [
+        {"type": "eq", "fun": lambda w: np.sum(w) - 1},
+        {"type": "eq", "fun": lambda w: expected_r @ w - R},
+    ]
+
+    # Define bounds
+    bounds = [(0, None)] * len(expected_r)
+
+    # Define initial guess
+    x0 = np.full(len(expected_r), 1/len(expected_r))
+
+    # Use minimize function to solve optimization problem
+    result = minimize(objective, x0, method="SLSQP", bounds=bounds, constraints=constraints)
+
+    # Return the objective value (risk) and the portfolio weights
+    return {"risk": result.fun, "weights": result.x, "R": R}
+
+# calculate maximized Sharpe Ratio with target return
+def optimize_Sharpe(covar, expected_r, R, rf):
+    # Define objective function
+    def negative_Sharpe(w):
+        returns = np.dot(expected_r, w)
+        std = np.sqrt(w @ covar @ w.T)
+        return -(returns - rf) / std
+
+    # Define constraints
+    constraints = [
+        {"type": "eq", "fun": lambda w: np.sum(w) - 1},
+        {"type": "eq", "fun": lambda w: expected_r @ w - R},
+    ]
+
+    # Define bounds
+    bounds = [(0, None)] * len(expected_r)
+
+    # Define initial guess
+    x0 = np.full(len(expected_r), 1/len(expected_r))
+
+    # Use minimize function to solve optimization problem
+    result = minimize(negative_Sharpe, x0, method="SLSQP", bounds=bounds, constraints=constraints)
+
+    # Return the objective value (risk) and the portfolio weights
+    return {"max_Sharpe_Ratio": -result.fun, "weights": result.x}
+
+# calculate maximized Sharpe Ratio without target return
+def optimize_Sharpe(covar, expected_r, rf):
+    # Define objective function
+    def negative_Sharpe(w):
+        returns = np.dot(expected_r, w)
+        std = np.sqrt(w @ covar @ w.T)
+        return -(returns - rf) / std
+
+    # Define constraints
+    constraints = [
+        {"type": "eq", "fun": lambda w: np.sum(w) - 1},
+    ]
+
+    # Define bounds
+    bounds = [(0, None)] * len(expected_r)
+
+    # Define initial guess
+    x0 = np.full(len(expected_r), 1/len(expected_r))
+
+    # Use minimize function to solve optimization problem
+    result = minimize(negative_Sharpe, x0, method="SLSQP", bounds=bounds, constraints=constraints)
+
+    # Return the objective value (risk) and the portfolio weights
+    return {"max_Sharpe_Ratio": -result.fun, "weights": result.x}
