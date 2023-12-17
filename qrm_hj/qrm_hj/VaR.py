@@ -902,4 +902,34 @@ def plot_dist_hist(data):
 # define a function to plot a vertical line intersecting with x axis
 def add_vertical_line(value):
     plt.axvline(x=value, color='b', label=None)
+    
+##############################
+    
+## Partial Derivative
+# define a function to calculate first order derivative with central difference
+def first_order_derivative(func, x, delta=1e-3):
+    return (func(x + delta) - func(x - delta)) / (2 * delta)
+
+# define a function to calculate second order derivative with central difference
+def second_order_derivative(func, x, delta=1e-3):
+    return (func(x + delta) - 2 * func(x) + func(x - delta)) / delta ** 2
+
+# incorporate above functions to calculate partial derivatives of indicated functions and return corresponding partial derivative functions
+def partial_derivative(func, arg_name, delta=1e-3, order=1):
+    arg_names = inspect.signature(func).parameters.keys()
+    derivative_functions = {1: first_order_derivative, 2: second_order_derivative}
+
+    def partial_func(*args, **kwargs):
+        arg_values = dict(zip(arg_names, args))
+        arg_values.update(kwargs)
+        x = arg_values.pop(arg_name)
+
+        def f(xi):
+            arg_values[arg_name] = xi
+            return func(**arg_values)
+
+        return derivative_functions[order](f, x, delta)
+
+    return partial_func
+
 
