@@ -184,3 +184,107 @@ def cal_his_var(portfolio, prices, p_type, alpha=0.05, N = 10000):
 
 def calculate_es(var, sim_data):
     return -np.mean(sim_data[sim_data <= -var])
+
+## Option Pricing
+# calculate implied volatility for GBSM
+def implied_vol_gbsm(underlying, strike, ttm, rf, b, price, type="call"):
+    f = lambda ivol: gbsm(underlying, strike, ttm, rf, b, ivol, type="call") - price
+    result = fsolve(f,0.5)
+    return result
+
+# calculate implied volatility for American options with dividends
+def implied_vol_americandiv(underlying, strike, ttm, rf, divAmts, divTimes, N, price, type="call"):
+    f = lambda ivol: bt_american_div(underlying, strike, ttm, rf, divAmts, divTimes, ivol, N, type="call") - price
+    result = fsolve(f,0.5)
+    return result
+    
+# Black Scholes Model for European option
+def gbsm(underlying, strike, ttm, rf, b, ivol, type="call"):
+    d1 = (np.log(underlying/strike) + (b+ivol**2/2)*ttm)/(ivol*np.sqrt(ttm))
+    d2 = d1 - ivol*np.sqrt(ttm)
+
+    if type == "call":
+        return underlying * np.exp((b-rf)*ttm) * norm.cdf(d1) - strike*np.exp(-rf*ttm)*norm.cdf(d2)
+    elif type == "put":
+        return strike*np.exp(-rf*ttm)*norm.cdf(-d2) - underlying*np.exp((b-rf)*ttm)*norm.cdf(-d1)
+    else:
+        print("Invalid type of option")
+        
+# binomial trees used to price American option with no dividends
+def bt_american(underlying, strike, ttm, rf, b, ivol, N, otype="call"):
+    dt = ttm / N
+    u = np.exp(ivol * np.sqrt(dt))
+    d = 1 / u
+    pu = (np.exp(b * dt) - d) / (u - d)
+    pd = 1.0 - pu
+    df = np.exp(-rf * dt)
+    if otype == "call":
+        z = 1
+    elif otype == "put":
+        z = -1
+
+    def nNodeFunc(n):
+        return int((n + 1) * (n + 2) / 2)
+
+    def idxFunc(i, j):
+        return nNodeFunc(j - 1) + i
+
+    nNodes = nNodeFunc(N)
+    optionValues = [0.0] * nNodes
+
+    for j in range(N, -1, -1):
+        for i in range(j, -1, -1):
+            idx = idxFunc(i, j)
+            price = underlying * u**i * d**(j-i)
+            optionValues[idx] = max(0, z * (price - strike))
+            
+            if j < N:
+                optionValues[idx] = max(optionValues[idx], df*(pu*optionValues[idxFunc(i+1, j+1)] + pd*optionValues[idxFunc(i, j+1)]))
+    
+    return optionValues[0]
+
+# binomial trees used to price American option with dividends
+def bt_american_div(underlying, strike, ttm, rf, divAmts, divTimes, ivol, N, type="call"):
+    if not divAmts or not divTimes or divTimes[0] > N:
+        return bt_american(underlying, strike, ttm, rf, rf, ivol, N, otype=type)
+    
+    dt = ttm / N
+    u = np.exp(ivol * np.sqrt(dt))
+    d = 1 / u
+    pu = (np.exp(rf * dt) - d) / (u - d)
+    pd = 1 - pu
+    df = np.exp(-rf * dt)
+    if type == "call":
+        z = 1
+    elif type == "put":
+        z = -1
+
+    def nNodeFunc(n):
+        return int((n + 1) * (n + 2) / 2)
+
+    def idxFunc(i, j):
+        return nNodeFunc(j - 1) + i
+
+    nDiv = len(divTimes)
+    nNodes = nNodeFunc(divTimes[0])
+
+    optionValues = np.zeros(len(range(nNodes)))
+
+    for j in range(divTimes[0], -1, -1):
+        for i in range(j, -1, -1):
+            idx = idxFunc(i, j)
+            price = underlying * u ** i * d ** (j - i)
+
+            if j < divTimes[0]:
+                # times before the dividend working backward induction
+                optionValues[idx] = max(0, z * (price - strike))
+                optionValues[idx] = max(optionValues[idx], df * (pu * optionValues[idxFunc(i + 1, j + 1)] + pd * optionValues[idxFunc(i, j + 1)]))
+            else:
+                # time of the dividend
+                valNoExercise = bt_american_div(price - divAmts[0], strike, ttm - divTimes[0] * dt, rf, divAmts[1:], [t - divTimes[0] for t in divTimes[1:]], ivol, N - divTimes[0], type=type)
+                valExercise = max(0, z * (price - strike))
+                optionValues[idx] = max(valNoExercise, valExercise)
+
+    return optionValues[0]
+
+
