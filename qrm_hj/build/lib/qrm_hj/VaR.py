@@ -3,6 +3,20 @@ import numpy as np
 from statsmodels.tsa.arima.model import ARIMA
 from scipy.stats import t, norm
 from . import MC
+import math
+import numpy as np
+import sys
+import pandas as pd
+from numpy.linalg import eigh
+import itertools
+from scipy.stats import norm, t, spearmanr
+import statsmodels.api as sm
+from scipy.optimize import fsolve, minimize
+import inspect
+from sklearn.linear_model import LinearRegression
+import statsmodels.graphics.tsaplots as stmplot
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 def return_calculate(prices: pd.DataFrame, method="ARITHMETIC", date_col="Date") -> pd.DataFrame:
     columns = prices.columns.values.tolist()
