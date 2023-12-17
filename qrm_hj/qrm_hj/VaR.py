@@ -182,8 +182,15 @@ def cal_his_var(portfolio, prices, p_type, alpha=0.05, N = 10000):
     var = np.percentile(sim_change, alpha*100) * (-1)
     return var, sim_change
 
-def calculate_es(var, sim_data):
-    return -np.mean(sim_data[sim_data <= -var])
+# ES calculation of individual data
+def cal_ES(x,alpha=0.05):
+    xs = np.sort(x)
+    n = alpha * len(xs)
+    iup = math.ceil(n)
+    idn = math.floor(n)
+    VaR = (xs[iup] + xs[idn]) / 2
+    ES = xs[0:idn].mean()
+    return -VaR,-ES
 
 ## Option Pricing
 # calculate implied volatility for GBSM
