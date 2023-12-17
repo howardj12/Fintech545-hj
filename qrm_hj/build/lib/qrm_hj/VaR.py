@@ -287,4 +287,64 @@ def bt_american_div(underlying, strike, ttm, rf, divAmts, divTimes, ivol, N, typ
 
     return optionValues[0]
 
+## Option Greeks
+# calculate delta of options with closed-form formulas
+def delta_gbsm(underlying, strike, ttm, rf, b, ivol, type="call"):
+    d1 = (np.log(underlying/strike) + (b+ivol**2/2)*ttm)/(ivol*np.sqrt(ttm))
+
+    if type == "call":
+        return np.exp((b - rf) * ttm) * norm.cdf(d1)
+    elif type == "put":
+        return np.exp((b - rf) * ttm) * (norm.cdf(d1) - 1)
+    else:
+        print("Invalid type of option")
+        
+# calculate Gamma of options with closed-form formulas
+def gamma_gbsm(underlying, strike, ttm, rf, b, ivol):
+    d1 = (np.log(underlying/strike) + (b+ivol**2/2)*ttm)/(ivol*np.sqrt(ttm))
+    result = norm.pdf(d1) * np.exp((b - rf) * ttm) / (underlying * ivol * np.sqrt(ttm))
+    return result
+
+# calculate Vega of options with closed-form formulas
+def vega_gbsm(underlying, strike, ttm, rf, b, ivol):
+    d1 = (np.log(underlying/strike) + (b+ivol**2/2)*ttm)/(ivol*np.sqrt(ttm))
+    result = underlying * norm.pdf(d1) * np.exp((b - rf) * ttm) * np.sqrt(ttm)
+    return result
+
+# calculate Theta of options with closed-form formulas
+def theta_gbsm(underlying, strike, ttm, rf, b, ivol, type="call"):
+    d1 = (np.log(underlying/strike) + (b+ivol**2/2)*ttm)/(ivol*np.sqrt(ttm))
+    d2 = d1 - ivol*np.sqrt(ttm)
+
+    if type == "call":
+        result_call = - underlying * np.exp((b - rf) * ttm) * norm.pdf(d1) * ivol / (2 * np.sqrt(ttm)) - (b - rf) * underlying * np.exp((b - rf) * ttm) * norm.cdf(d1) - rf * strike * np.exp(-rf * ttm) * norm.cdf(d2)
+        return result_call
+    elif type == "put":
+        result_put = - underlying * np.exp((b - rf) * ttm) * norm.pdf(d1) * ivol / (2 * np.sqrt(ttm)) + (b - rf) * underlying * np.exp((b - rf) * ttm) * norm.cdf(-d1) + rf * strike * np.exp(-rf * ttm) * norm.cdf(-d2)
+        return result_put
+    else:
+        print("Invalid type of option")
+
+# calculate Rho of options with closed-form formulas
+def rho_gbsm(underlying, strike, ttm, rf, b, ivol, type="call"):
+    d1 = (np.log(underlying/strike) + (b+ivol**2/2)*ttm)/(ivol*np.sqrt(ttm))
+    d2 = d1 - ivol*np.sqrt(ttm)
+
+    if type == "call":
+        return ttm * strike * np.exp(-rf * ttm) * norm.cdf(d2)
+    elif type == "put":
+        return -ttm * strike * np.exp(-rf * ttm) * norm.cdf(-d2)
+    else:
+        print("Invalid type of option")
+
+# calculate Carry Rho of options with closed-form formulas
+def crho_gbsm(underlying, strike, ttm, rf, b, ivol, type="call"):
+    d1 = (np.log(underlying/strike) + (b+ivol**2/2)*ttm)/(ivol*np.sqrt(ttm))
+    
+    if type == "call":
+        return ttm * underlying * np.exp((b - rf) * ttm) * norm.cdf(d1)
+    elif type == "put":
+        return -ttm * underlying * np.exp((b - rf) * ttm) * norm.cdf(-d1)
+    else:
+        print("Invalid type of option")
 
