@@ -529,3 +529,107 @@ def optimize_Sharpe(covar, expected_r, rf):
 
     # Return the objective value (risk) and the portfolio weights
     return {"max_Sharpe_Ratio": -result.fun, "weights": result.x}
+
+##############################
+
+## Copula
+# Gaussian Copula for same distributions
+def Gaussian_Copula_same(data,dist="norm",N=500):
+    # define a function to fit returns to indicated distribution
+    def returns_fit(data,dist_fit="norm"):
+        if dist == "norm":
+            out = {"example": ["loc", "scale", "dist"]}
+            for i in data.columns:
+                temp_results = norm.fit(data.loc[:,i])
+                temp_dist = norm(temp_results[0], temp_results[1])
+                temp = [temp_results[0], temp_results[1], temp_dist]
+                out[i] = temp
+            return out
+        elif dist == "t":
+            out = {"example": ["df", "loc", "scale", "dist"]}
+            for i in data.columns:
+                temp_results = t.fit(data.loc[:,i])
+                temp_dist = t(temp_results[0], temp_results[1], temp_results[2])
+                temp = [temp_results[0], temp_results[1], temp_results[2], temp_dist]
+                out[i] = temp
+            return out
+        
+    # define a function to calculate U matrix
+    def generate_U(data, fits):
+        assert len(data.columns) == len(fits) - 1
+        temp = []
+        df = pd.DataFrame()
+        for i in data.columns:
+            temp_cdf = fits[i][-1].cdf(data.loc[:,i])
+            df[i] = temp_cdf
+        return df
+    
+    # define a function to convert to sim values
+    def convert_sim_values(fit, sim_U):
+        out = pd.DataFrame()
+        for i in sim_U.columns:
+            out[i] = fit[i][-1].ppf(sim_U.loc[:,i])
+        return out
+    
+    # fit data into indicated distribution
+    data_fit = returns_fit(data,dist_fit=dist)
+    # generate U matrix from data and fitted model
+    data_U = generate_U(data,data_fit)
+    # calculate spearman correlation matrix for input data
+    data_spear = pd.DataFrame(spearmanr(data_U)[0], columns=data.columns, index=data.columns)
+    # simulate values
+    data_sim = np.random.multivariate_normal(np.zeros(len(data.columns)), data_spear, (1,len(data.columns),N))[0][0]
+    # convert to U_sim
+    data_sim_U = pd.DataFrame(norm.cdf(data_sim), columns=data.columns)
+    # convert U_sim to sim values for each portfolio
+    data_simout = convert_sim_values(data_fit, data_sim_U)
+    return data_simout
+
+# Gaussian Copula for different distributions
+def Gaussian_Copula_diff(data,N=500):
+    # define a function to fit returns to indicated distribution
+    def returns_fit(data):
+        out = {"example": ["df", "loc", "scale", "dist"]}
+        for i in data.columns:
+            if data.loc[data.index[0],i] == "norm":
+                temp_results = norm.fit(data.loc[data.index[1]:,i])
+                temp_dist = norm(temp_results[0], temp_results[1])
+                temp = [temp_results[0], temp_results[1], temp_dist]
+                out[i] = [0] + temp
+            elif data.loc[data.index[0],i] == "t":
+                temp_results = t.fit(data.loc[data.index[1]:,i])
+                temp_dist = t(temp_results[0], temp_results[1], temp_results[2])
+                temp = [temp_results[0], temp_results[1], temp_results[2], temp_dist]
+                out[i] = temp
+        return out
+        
+    # define a function to calculate U matrix
+    def generate_U(data, fits):
+        assert len(data.columns) == len(fits) - 1
+        temp = []
+        df = pd.DataFrame()
+        for i in data.columns:
+            temp_cdf = fits[i][-1].cdf(data.loc[data.index[1]:,i])
+            df[i] = temp_cdf
+        return df
+    
+    # define a function to convert to sim values
+    def convert_sim_values(fit, sim_U):
+        out = pd.DataFrame()
+        for i in sim_U.columns:
+            out[i] = fit[i][-1].ppf(sim_U.loc[:,i])
+        return out
+    
+    # fit data into indicated distribution
+    data_fit = returns_fit(data)
+    # generate U matrix from data and fitted model
+    data_U = generate_U(data,data_fit)
+    # calculate spearman correlation matrix for input data
+    data_spear = pd.DataFrame(spearmanr(data_U)[0], columns=data.columns, index=data.columns)
+    # simulate values
+    data_sim = np.random.multivariate_normal(np.zeros(len(data.columns)), data_spear, (1,len(data.columns),N))[0][0]
+    # convert to U_sim
+    data_sim_U = pd.DataFrame(norm.cdf(data_sim), columns=data.columns)
+    # convert U_sim to sim values for each portfolio
+    data_simout = convert_sim_values(data_fit, data_sim_U)
+    return data_simout
