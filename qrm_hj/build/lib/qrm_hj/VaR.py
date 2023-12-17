@@ -29,6 +29,40 @@ def return_calculate(prices: pd.DataFrame, method="ARITHMETIC", date_col="Date")
         output_df[columns[i]] = adjusted_prices[:,i]
     return output_df
 
+# calculate covariance matrix for data with missing values
+def cov_missing(x, skipMiss=True, fun=np.cov):
+    n, m = x.shape
+    nMiss = np.sum([np.isnan(x[:, i]) for i in range(m)], axis=1)
+    
+    if np.sum(nMiss) == 0:
+        return fun(x)
+    
+    idxMissing = [set(np.where(np.isnan(x[:, i]))[0]) for i in range(m)]
+    
+    if skipMiss:
+        rows = set(range(n))
+        for c in range(m):
+            for rm in idxMissing[c]:
+                rows.discard(rm)
+        rows = sorted(rows)
+
+        return fun(x[rows, :].T)
+    
+    else:
+        out = np.empty((m, m))
+        for i in range(m):
+            for j in range(m):
+                rows = set(range(n))
+                for c in (i, j):
+                    for rm in idxMissing[c]:
+                        rows.discard(rm)
+                rows = sorted(rows)
+
+                temp_out = fun(x[rows][:,[i,j]].T)
+                out[i,j] = temp_out[0, 1]
+        return out
+
+
 #Calculate VaR using a normal distribution
 def var_normal(returns, significance_level=0.05, num_samples=10000):
     # Calculate the mean and standard deviation of the returns
